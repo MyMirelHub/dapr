@@ -38,7 +38,8 @@ func TestConfigCorrectValues(t *testing.T) {
 			AllowedServiceAccountsPrefixNames: "ns*:sa,namespace:sa*",
 			ControlPlaneTrustDomain:           "trust.domain",
 		},
-		Healthz: healthz.New(),
+		Healthz:          healthz.New(),
+		SchedulerEnabled: true,
 	})
 	require.NoError(t, err)
 
@@ -49,6 +50,7 @@ func TestConfigCorrectValues(t *testing.T) {
 	m, err := namespacednamematcher.CreateFromString("ns*:sa,namespace:sa*")
 	require.NoError(t, err)
 	assert.Equal(t, m, injector.namespaceNameMatcher)
+	assert.True(t, injector.schedulerEnabled)
 }
 
 func TestNewInjectorBadAllowedPrefixedServiceAccountConfig(t *testing.T) {
@@ -156,5 +158,27 @@ func TestAllowedControllersServiceAccountUID(t *testing.T) {
 		uids, err := AllowedControllersServiceAccountUID(t.Context(), Config{AllowedServiceAccounts: "test:test,abc:abc"}, client)
 		require.NoError(t, err)
 		assert.Len(t, uids, 3)
+	})
+}
+
+func TestSchedulerEnabledOption(t *testing.T) {
+	t.Run("scheduler disabled", func(t *testing.T) {
+		i, err := NewInjector(Options{
+			Config:           Config{},
+			SchedulerEnabled: false,
+			Healthz:          healthz.New(),
+		})
+		require.NoError(t, err)
+		assert.False(t, i.(*injector).schedulerEnabled)
+	})
+
+	t.Run("scheduler enabled", func(t *testing.T) {
+		i, err := NewInjector(Options{
+			Config:           Config{},
+			SchedulerEnabled: true,
+			Healthz:          healthz.New(),
+		})
+		require.NoError(t, err)
+		assert.True(t, i.(*injector).schedulerEnabled)
 	})
 }

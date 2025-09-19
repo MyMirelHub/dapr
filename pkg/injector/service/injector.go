@@ -83,6 +83,7 @@ type Options struct {
 
 	ControlPlaneNamespace   string
 	ControlPlaneTrustDomain string
+	SchedulerEnabled        bool
 }
 
 type injector struct {
@@ -103,6 +104,7 @@ type injector struct {
 	htarget              healthz.Target
 	namespaceNameMatcher *namespacednamematcher.EqualPrefixNameNamespaceMatcher
 	running              atomic.Bool
+	schedulerEnabled     bool
 }
 
 // errorToAdmissionResponse is a helper function to create an AdmissionResponse
@@ -160,6 +162,7 @@ func NewInjector(opts Options) (Injector, error) {
 		authUIDs:                opts.AuthUIDs,
 		controlPlaneNamespace:   opts.ControlPlaneNamespace,
 		controlPlaneTrustDomain: opts.ControlPlaneTrustDomain,
+		schedulerEnabled:        opts.SchedulerEnabled,
 		htarget:                 opts.Healthz.AddTarget("injector-service"),
 	}
 
@@ -234,33 +237,37 @@ func (i *injector) Run(ctx context.Context, tlsConfig *tls.Config, sentryID spif
 	i.currentTrustAnchors = currentTrustAnchors
 	i.sentrySPIFFEID = sentryID
 
-	for {
-		var sched *appsv1.StatefulSet
-		sched, err := i.kubeClient.AppsV1().StatefulSets(i.controlPlaneNamespace).Get(ctx, "dapr-scheduler-server", metav1.GetOptions{})
-		if apierrors.IsNotFound(err) {
-			log.Warnf("%s/dapr-scheduler-server StatefulSet not found, retrying in 5 seconds", i.controlPlaneNamespace)
-			select {
-			case <-time.After(5 * time.Second):
-				continue
-			case <-ctx.Done():
-				return fmt.Errorf("%s/dapr-scheduler-server StatefulSet not found", i.controlPlaneNamespace)
+	if i.schedulerEnabled {
+		for {
+			var sched *appsv1.StatefulSet
+			sched, err := i.kubeClient.AppsV1().StatefulSets(i.controlPlaneNamespace).Get(ctx, "dapr-scheduler-server", metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				log.Warnf("%s/dapr-scheduler-server StatefulSet not found, retrying in 5 seconds", i.controlPlaneNamespace)
+				select {
+				case <-time.After(5 * time.Second):
+					continue
+				case <-ctx.Done():
+					return fmt.Errorf("%s/dapr-scheduler-server StatefulSet not found", i.controlPlaneNamespace)
+				}
 			}
+
+			if err != nil {
+				return fmt.Errorf("error getting dapr-scheduler-server StatefulSet: %w", err)
+			}
+
+			if sched.Spec.Replicas == nil {
+				return errors.New("dapr-scheduler-server StatefulSet has no replicas")
+			}
+
+			i.schedulerReplicaCount = int(*sched.Spec.Replicas)
+			break
 		}
 
-		if err != nil {
-			return fmt.Errorf("error getting dapr-scheduler-server StatefulSet: %w", err)
+		if i.schedulerReplicaCount > 0 {
+			log.Infof("Found dapr-scheduler-server StatefulSet %v replicas", i.schedulerReplicaCount)
 		}
-
-		if sched.Spec.Replicas == nil {
-			return errors.New("dapr-scheduler-server StatefulSet has no replicas")
-		}
-
-		i.schedulerReplicaCount = int(*sched.Spec.Replicas)
-		break
-	}
-
-	if i.schedulerReplicaCount > 0 {
-		log.Infof("Found dapr-scheduler-server StatefulSet %v replicas", i.schedulerReplicaCount)
+	} else {
+		log.Info("Scheduler is disabled, skipping scheduler server lookup")
 	}
 
 	ln, err := tls.Listen("tcp", fmt.Sprintf(":%d", i.port), tlsConfig)
