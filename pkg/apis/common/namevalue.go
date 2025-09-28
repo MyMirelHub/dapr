@@ -34,6 +34,17 @@ type NameValuePair struct {
 	// EnvRef is the name of an environmental variable to read the value from.
 	//+optional
 	EnvRef string `json:"envRef,omitempty"`
+	// TemplateRefs is a map of template variables to their values.
+	//+optional
+	TemplateRefs map[string]TemplateRef `json:"templateRefs,omitempty"`
+}
+
+// TemplateRef defines a reference for template expansion.
+type TemplateRef struct {
+	// +optional
+	Value *string `json:"value,omitempty"`
+	// +optional
+	SecretKeyRef *SecretKeyRef `json:"secretKeyRef,omitempty"`
 }
 
 // HasValue returns true if the NameValuePair has a non-empty value.

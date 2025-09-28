@@ -14,14 +14,19 @@ limitations under the License.
 package processor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"text/template"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
+	"github.com/dapr/components-contrib/secretstores"
+	"github.com/dapr/dapr/pkg/apis/common"
 	componentsapi "github.com/dapr/dapr/pkg/apis/components/v1alpha1"
 	"github.com/dapr/dapr/pkg/components"
 	diag "github.com/dapr/dapr/pkg/diagnostics"
@@ -247,12 +252,47 @@ type componentPreprocessRes struct {
 }
 
 func (p *Processor) preprocessOneComponent(ctx context.Context, comp *componentsapi.Component) componentPreprocessRes {
+	// Existing secret processing logic
 	_, unreadySecretsStore := p.secret.ProcessResource(ctx, comp)
 	if unreadySecretsStore != "" {
 		return componentPreprocessRes{
 			unreadyDependency: componentDependency(components.CategorySecretStore, unreadySecretsStore),
 		}
 	}
+
+	// New Template Rendering Logic
+	for i, meta := range comp.Spec.Metadata {
+		if len(meta.TemplateRefs) > 0 && meta.Value.String() != "" {
+			// Resolve template variables
+			resolvedValues, err := p.resolveTemplateRefs(ctx, comp.GetNamespace(), meta.TemplateRefs)
+			if err != nil {
+				log.Errorf("failed to resolve template refs for '%s': %v", meta.Name, err)
+				// Decide if you want to fail hard or just log the error
+				continue
+			}
+
+			// Parse and render the template
+			tmpl, err := template.New(meta.Name).Parse(meta.Value.String())
+			if err != nil {
+				log.Errorf("failed to parse template for '%s': %v", meta.Name, err)
+				continue
+			}
+
+			var renderedValue bytes.Buffer
+			if err := tmpl.Execute(&renderedValue, resolvedValues); err != nil {
+				log.Errorf("failed to render template for '%s': %v", meta.Name, err)
+				continue
+			}
+
+			// Update the metadata value with the rendered template
+			comp.Spec.Metadata[i].Value = common.DynamicValue{
+				JSON: apiextensionsv1.JSON{
+					Raw: []byte(`"` + renderedValue.String() + `"`),
+				},
+			}
+		}
+	}
+
 	return componentPreprocessRes{}
 }
 
@@ -267,4 +307,30 @@ func (p *Processor) category(comp componentsapi.Component) components.Category {
 
 func componentDependency(compCategory components.Category, name string) string {
 	return string(compCategory) + ":" + name
+}
+
+func (p *Processor) resolveTemplateRefs(ctx context.Context, namespace string, refs map[string]common.TemplateRef) (map[string]string, error) {
+	resolved := make(map[string]string)
+	for key, ref := range refs {
+		if ref.Value != nil {
+			resolved[key] = *ref.Value
+		} else if ref.SecretKeyRef != nil {
+			secretStore, ok := p.compStore.GetSecretStore(ref.SecretKeyRef.Name)
+			if !ok {
+				return nil, fmt.Errorf("secret store '%s' not found", ref.SecretKeyRef.Name)
+			}
+			// Passing the namespace here is important for Kubernetes secret store
+			val, err := secretStore.GetSecret(ctx, secretstores.GetSecretRequest{
+				Name: ref.SecretKeyRef.Key,
+				Metadata: map[string]string{
+					"namespace": namespace,
+				},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to get secret '%s' from secret store '%s': %w", ref.SecretKeyRef.Key, ref.SecretKeyRef.Name, err)
+			}
+			resolved[key] = val.Data[ref.SecretKeyRef.Key]
+		}
+	}
+	return resolved, nil
 }
