@@ -301,6 +301,109 @@ func TestGetMetricsPort(t *testing.T) {
 	})
 }
 
+func TestCreateDaprServiceWithCustomAnnotations(t *testing.T) {
+	testDaprHandler := getTestDaprHandler()
+	ctx := t.Context()
+	myDaprService := types.NamespacedName{
+		Namespace: "test",
+		Name:      "test",
+	}
+
+	t.Run("service annotations copied from deployment metadata", func(t *testing.T) {
+		// Arrange
+		deployment := getDeploymentWithServiceAnnotations("test", "true", map[string]string{
+			"dapr.io/service-annotation-com.example.policy/app":  "example-app",
+			"dapr.io/service-annotation-com.example.policy/env":  "production",
+			"dapr.io/service-annotation-com.example.policy/team": "platform",
+		})
+
+		// Act
+		service := testDaprHandler.createDaprServiceValues(ctx, myDaprService, deployment, "test")
+
+		// Assert
+		require.NotNil(t, service)
+		assert.Equal(t, "test", service.ObjectMeta.Annotations[annotations.KeyAppID])
+		assert.Equal(t, "example-app", service.ObjectMeta.Annotations["com.example.policy/app"])
+		assert.Equal(t, "production", service.ObjectMeta.Annotations["com.example.policy/env"])
+		assert.Equal(t, "platform", service.ObjectMeta.Annotations["com.example.policy/team"])
+	})
+
+	t.Run("service annotations not copied from pod template annotations", func(t *testing.T) {
+		// Arrange - annotations in pod template should not be copied
+		deployment := getDeployment("test", "true")
+		deployment.GetTemplateAnnotations()["dapr.io/service-annotation-com.example.policy/app"] = "should-not-appear"
+
+		// Act
+		service := testDaprHandler.createDaprServiceValues(ctx, myDaprService, deployment, "test")
+
+		// Assert
+		require.NotNil(t, service)
+		assert.Equal(t, "test", service.ObjectMeta.Annotations[annotations.KeyAppID])
+		_, exists := service.ObjectMeta.Annotations["com.example.policy/app"]
+		assert.False(t, exists, "annotation from pod template should not be copied")
+	})
+
+	t.Run("non-prefixed annotations not copied", func(t *testing.T) {
+		// Arrange
+		deployment := getDeploymentWithServiceAnnotations("test", "true", map[string]string{
+			"com.example.policy/app": "should-not-appear",
+		})
+
+		// Act
+		service := testDaprHandler.createDaprServiceValues(ctx, myDaprService, deployment, "test")
+
+		// Assert
+		require.NotNil(t, service)
+		_, exists := service.ObjectMeta.Annotations["com.example.policy/app"]
+		assert.False(t, exists, "non-prefixed annotation should not be copied")
+	})
+
+	t.Run("service annotations merged with prometheus annotations", func(t *testing.T) {
+		// Arrange
+		deployment := getDeploymentWithServiceAnnotations("test", "true", map[string]string{
+			"dapr.io/service-annotation-com.example.policy/app": "example-app",
+		})
+		deployment.GetTemplateAnnotations()[annotations.KeyEnableMetrics] = "true"
+
+		// Act
+		service := testDaprHandler.createDaprServiceValues(ctx, myDaprService, deployment, "test")
+
+		// Assert
+		require.NotNil(t, service)
+		assert.Equal(t, "test", service.ObjectMeta.Annotations[annotations.KeyAppID])
+		assert.Equal(t, "example-app", service.ObjectMeta.Annotations["com.example.policy/app"])
+		assert.Equal(t, "true", service.ObjectMeta.Annotations["prometheus.io/scrape"])
+		assert.Equal(t, "true", service.ObjectMeta.Annotations["prometheus.io/probe"])
+	})
+
+	t.Run("service annotations work with statefulset", func(t *testing.T) {
+		statefulset := getStatefulSetWithServiceAnnotations("test", "true", map[string]string{
+			"dapr.io/service-annotation-com.example.policy/app": "statefulset-app",
+		})
+
+		// Act
+		service := testDaprHandler.createDaprServiceValues(ctx, myDaprService, statefulset, "test")
+
+		// Assert
+		require.NotNil(t, service)
+		assert.Equal(t, "test", service.ObjectMeta.Annotations[annotations.KeyAppID])
+		assert.Equal(t, "statefulset-app", service.ObjectMeta.Annotations["com.example.policy/app"])
+	})
+
+	t.Run("empty prefix removal works correctly", func(t *testing.T) {
+		deployment := getDeploymentWithServiceAnnotations("test", "true", map[string]string{
+			"dapr.io/service-annotation-": "empty-key-value",
+		})
+
+		// Act
+		service := testDaprHandler.createDaprServiceValues(ctx, myDaprService, deployment, "test")
+
+		// Assert
+		require.NotNil(t, service)
+		assert.Equal(t, "empty-key-value", service.ObjectMeta.Annotations[""])
+	})
+}
+
 func TestWrapper(t *testing.T) {
 	deploymentWrapper := getDeployment("test_id", "true")
 	statefulsetWrapper := getStatefulSet("test_id", "true")
@@ -405,6 +508,14 @@ func getDeploymentWithMetricsPortAnnotation(daprID string, daprEnabled string, m
 	d := getDeployment(daprID, daprEnabled)
 	d.GetTemplateAnnotations()[annotations.KeyMetricsPort] = metricsPort
 	return d
+}
+
+func getDeploymentWithServiceAnnotations(daprID string, daprEnabled string, serviceAnnotations map[string]string) ObjectWrapper {
+	return &DeploymentWrapper{testobjects.GetDeployment(daprID, daprEnabled, testobjects.AddAnnotations(serviceAnnotations))}
+}
+
+func getStatefulSetWithServiceAnnotations(daprID string, daprEnabled string, serviceAnnotations map[string]string) ObjectWrapper {
+	return &StatefulSetWrapper{testobjects.GetStatefulSet(daprID, daprEnabled, testobjects.AddAnnotations(serviceAnnotations))}
 }
 
 func getDeploymentWithGRPCPortAnnotation(daprID string, daprEnabled string, grpcPort *string, internalGRPCPort *string) ObjectWrapper {

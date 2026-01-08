@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts"
 	argov1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
@@ -22,7 +23,7 @@ import (
 	"github.com/dapr/dapr/pkg/operator/monitoring"
 	"github.com/dapr/dapr/pkg/validation"
 	"github.com/dapr/kit/logger"
-	"github.com/dapr/kit/strings"
+	daprstrings "github.com/dapr/kit/strings"
 )
 
 const (
@@ -41,6 +42,7 @@ const (
 	annotationPrometheusScrape         = "prometheus.io/scrape"
 	annotationPrometheusPort           = "prometheus.io/port"
 	annotationPrometheusPath           = "prometheus.io/path"
+	serviceAnnotationPrefix            = "dapr.io/service-annotation-"
 )
 
 var log = logger.NewLogger("dapr.operator.handlers")
@@ -278,6 +280,16 @@ func (h *DaprHandler) createDaprServiceValues(ctx context.Context, expectedServi
 		annotationsMap[annotationPrometheusPath] = "/"
 	}
 
+	// Copy annotations with prefix dapr.io/service-annotation-* from deployment metadata to service
+	deploymentAnnotations := wrapper.GetObject().GetAnnotations()
+	for key, value := range deploymentAnnotations {
+		if strings.HasPrefix(key, serviceAnnotationPrefix) {
+			//
+			serviceKey := strings.TrimPrefix(key, serviceAnnotationPrefix)
+			annotationsMap[serviceKey] = value
+		}
+	}
+
 	grpcPort := h.getGRPCPort(wrapper)
 	internalGRPCPort := h.getInternalGRPCPort(wrapper)
 	return &corev1.Service{
@@ -333,7 +345,7 @@ func (h *DaprHandler) getEnableMetrics(wrapper ObjectWrapper) bool {
 	annotationsMap := wrapper.GetTemplateAnnotations()
 	enableMetrics := defaultMetricsEnabled
 	if val := annotationsMap[annotations.KeyEnableMetrics]; val != "" {
-		enableMetrics = strings.IsTruthy(val)
+		enableMetrics = daprstrings.IsTruthy(val)
 	}
 	return enableMetrics
 }
