@@ -53,6 +53,8 @@ spec:
 {{- end }}
     spec:
       securityContext:
+        runAsUser: {{ .Values.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.securityContext.runAsGroup }}
         fsGroup: {{ .Values.securityContext.fsGroup }}
       containers:
       - name: dapr-scheduler-server
@@ -186,6 +188,8 @@ spec:
 {{- if eq .Values.global.daprControlPlaneOs "linux" }}
         securityContext:
           runAsNonRoot: {{ .Values.securityContext.runAsNonRoot }}
+          runAsUser: {{ .Values.securityContext.runAsUser }}
+          runAsGroup: {{ .Values.securityContext.runAsGroup }}
           allowPrivilegeEscalation: false
   {{- if eq .Values.debug.enabled true }}
           capabilities:

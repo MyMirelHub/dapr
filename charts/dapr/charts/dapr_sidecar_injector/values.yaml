@@ -27,6 +27,8 @@ webhookFailurePolicy: Ignore
 sidecarImagePullPolicy: IfNotPresent
 runAsNonRoot: true
 sidecarRunAsNonRoot: true
+sidecarRunAsUser: 65532
+sidecarRunAsGroup: 65532
 sidecarReadOnlyRootFilesystem: true
 sidecarDropALLCapabilities: false
 enableK8sDownwardAPIs: false

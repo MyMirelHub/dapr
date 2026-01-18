@@ -71,6 +71,8 @@ spec:
 {{- if eq .Values.global.daprControlPlaneOs "linux" }}
         securityContext:
           runAsNonRoot: {{ .Values.runAsNonRoot }}
+          runAsUser: {{ .Values.runAsUser }}
+          runAsGroup: {{ .Values.runAsGroup }}
           allowPrivilegeEscalation: false
   {{- if eq .Values.debug.enabled true }}
           capabilities:

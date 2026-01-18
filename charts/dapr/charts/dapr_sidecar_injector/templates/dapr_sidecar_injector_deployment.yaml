@@ -78,6 +78,8 @@ spec:
           allowPrivilegeEscalation: false
   {{- if eq .Values.runAsNonRoot true }}
           runAsNonRoot: {{ .Values.runAsNonRoot }}
+          runAsUser: {{ .Values.runAsUser }}
+          runAsGroup: {{ .Values.runAsGroup }}
   {{- else }}
           runAsUser: 1000
   {{- end }}
