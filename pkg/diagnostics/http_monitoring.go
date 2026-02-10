@@ -130,7 +130,8 @@ func (h *httpMetrics) getMetricsPath(path string) string {
 	if !h.legacy {
 		return ""
 	}
-	return path
+	// Apply legacy conversion only as a fallback
+	return h.convertPathToMetricLabel(path)
 }
 
 func (h *httpMetrics) getMetricsMethod(method string) string {
@@ -300,9 +301,9 @@ func (h *httpMetrics) Init(meter view.Meter, appID string, config HTTPMonitoring
 	h.excludeVerbs = config.excludeVerbs
 	h.meter = meter
 
-	if config.pathMatching != nil {
-		h.pathMatcher = newPathMatching(config.pathMatching, config.legacy)
-	}
+	// Always initialize path matching to ensure default patterns (like actors) are registered
+	// even if the user didn't provide any custom paths.
+	h.pathMatcher = newPathMatching(config.pathMatching, config.legacy)
 
 	tags := []tag.Key{appIDKey}
 
@@ -342,7 +343,8 @@ func (h *httpMetrics) HTTPMiddleware(next http.Handler) http.Handler {
 
 		var path string
 		if h.legacy || h.pathMatcher.enabled() {
-			path = h.convertPathToMetricLabel(r.URL.Path)
+			// Pass raw path to allow pathMatcher to see the full URL
+			path = r.URL.Path
 		}
 
 		// Wrap the writer in a ResponseWriter so we can collect stats such as status code and size

@@ -33,9 +33,7 @@ type pathMatching struct {
 //
 // All other paths in the 'paths' slice are cleaned, sorted, and registered.
 func newPathMatching(paths []string, legacy bool) *pathMatching {
-	if len(paths) == 0 {
-		return nil
-	}
+	// We allow empty paths input because cleanAndSortPaths will add default system patterns.
 
 	mux := http.NewServeMux()
 	pm := &pathMatching{mux: mux}
@@ -60,7 +58,8 @@ func newPathMatching(paths []string, legacy bool) *pathMatching {
 // cleanAndSortPaths takes user input paths and returns a sorted, deduplicated list
 // of all patterns to be registered, including the auto-generated invoke variants.
 func cleanAndSortPaths(paths []string) ([]string, bool) {
-	cleanPaths := make([]string, 0, len(paths)*2)
+	// Capacity hint: user paths * 2 (for invoke alias) + 5 default actor patterns
+	cleanPaths := make([]string, 0, len(paths)*2+5)
 	foundRootPath := false
 
 	for _, raw := range paths {
@@ -71,11 +70,27 @@ func cleanAndSortPaths(paths []string) ([]string, bool) {
 			foundRootPath = true
 		}
 
-		// Auto-register Service Invocation prefix
-		if !strings.HasPrefix(p, "/v1.0/invoke/") {
+		// Auto-register Service Invocation prefix for user paths
+		// Skip for Actor paths to avoid "Service Invocation to Actors" confusion if not desired,
+		// and skip if already an invoke path.
+		if !strings.HasPrefix(p, "/v1.0/invoke/") && !strings.HasPrefix(p, "/v1.0/actors/") {
 			invokePath := "/v1.0/invoke/{app_id}/method" + p
 			cleanPaths = append(cleanPaths, invokePath)
 		}
+	}
+
+	// Always register default Actor patterns to prevent high cardinality
+	// leaks on system APIs, even if the user didn't explicitly config them.
+	defaultActorPatterns := []string{
+		"/v1.0/actors/{actorType}/{actorId}/method/{method}",
+		"/v1.0/actors/{actorType}/{actorId}/state/{key}",
+		"/v1.0/actors/{actorType}/{actorId}/reminders/{name}",
+		"/v1.0/actors/{actorType}/{actorId}/timers/{name}",
+		"/v1.0/actors/{actorType}/{actorId}/state",
+	}
+
+	for _, ap := range defaultActorPatterns {
+		cleanPaths = append(cleanPaths, ap)
 	}
 
 	slices.Sort(cleanPaths)

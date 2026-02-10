@@ -111,8 +111,10 @@ func TestHTTPMetricsPathMatchingNotEnabled(t *testing.T) {
 		meter.Stop()
 	})
 	testHTTP.Init(meter, "fakeID", HTTPMonitoringConfig{}, nil)
+	// Even if not enabled by user, default system patterns (actors) enable the matcher.
+	// So matching is attempted (ok=true) but /orders is not found (matchedPath="")
 	matchedPath, ok := testHTTP.pathMatcher.match("/orders")
-	require.False(t, ok)
+	require.True(t, ok)
 	require.Equal(t, "", matchedPath)
 }
 
@@ -324,6 +326,44 @@ func fakeHTTPRequest(body string) *http.Request {
 	return req
 }
 
+func TestHTTPMiddleware_ActorPathRegression(t *testing.T) {
+	// Regression test for issue where legacy path converter truncated actor paths
+	// BEFORE the path matcher could see them.
+
+	// 1. Configure a specific actor method pattern
+	paths := []string{"/v1.0/actors/MyActor/{id}/method/MyMethod"}
+	// legacy=false (strict mode)
+	configHTTP := NewHTTPMonitoringConfig(paths, false, false)
+
+	testHTTP := newHTTPMetrics()
+	meter := view.NewMeter()
+	meter.Start()
+	t.Cleanup(func() { meter.Stop() })
+
+	// Initialize
+	require.NoError(t, testHTTP.Init(meter, "fakeID", configHTTP, config.LoadDefaultConfiguration().GetMetricsSpec().GetLatencyDistribution(log)))
+
+	// 2. Middleware setup
+	handler := testHTTP.HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// 3. Send request with full path
+	// Legacy behavior would truncate this to "/v1.0/actors/MyActor/{id}/method" (dropping 'MyMethod')
+	reqPath := "/v1.0/actors/MyActor/123/method/MyMethod"
+	req, _ := http.NewRequest(http.MethodPost, "http://localhost:3500"+reqPath, nil)
+
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	// 4. Verify metric recorded with FULL pattern match
+	rows, err := meter.RetrieveData("http/server/request_count")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	pathTag := getPathTag(rows[0])
+	assert.Equal(t, "/v1.0/actors/MyActor/{id}/method/MyMethod", pathTag, "Path should match configured pattern, not be truncated")
+}
+
 func TestHTTPMiddleware_Normalization(t *testing.T) {
 	paths := []string{"/v1.0/actors/myactortype/{id}/method"}
 
@@ -473,9 +513,10 @@ func TestHTTPMetricsPathMatchingUnmatchedPathWithSubtreeStrictMode(t *testing.T)
 	})
 	testHTTP.Init(meter, "fakeID", configHTTP, nil)
 
-	matchedPath, ok := testHTTP.pathMatcher.match("//v1.0/actors/WeatherActor/xyz/method/GetWeatherAsync")
+	// Use a path that is NOT a default actor path, to ensure it falls back to root "/"
+	matchedPath, ok := testHTTP.pathMatcher.match("//v1.0/other/Service/xyz/method/GetWeatherAsync")
 	require.True(t, ok)
-	require.Equal(t, "/", matchedPath, "double-slash actor path should match root '/' in strict mode")
+	require.Equal(t, "/", matchedPath, "double-slash path should match root '/' in strict mode")
 }
 
 func TestHTTPMetricsPathMatchingServiceInvocation(t *testing.T) {
